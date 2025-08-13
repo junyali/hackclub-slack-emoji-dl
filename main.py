@@ -23,8 +23,14 @@ def setup_logging():
 	logger = logging.getLogger(__name__)
 	return logger
 
+def is_valid_url(url):
+	return isinstance(url, str) and (url.startswith("http://") or url.startswith("https://"))
+
 def download_emoji(name, url, logger):
 	try:
+		if not is_valid_url(url):
+			logger.warning(f"Skipped {name} (not a valid URL)")
+
 		sanitised_name = "".join(c for c in name if c.isalnum() or c in ("-", "_"))
 		if not sanitised_name:
 			sanitised_name = "emoji"
