@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://badger.hackclub.dev/api/emoji"
 OUTPUT_DIR = "./output"
+THREADS = 100
 
 def setup_logging():
 	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -76,7 +77,7 @@ def main():
 
 		success_count = 0
 
-		with ThreadPoolExecutor(max_workers=10) as executor:
+		with ThreadPoolExecutor(max_workers=THREADS) as executor:
 			future_to_emoji = {
 				executor.submit(download_emoji, name, url, logger): (name, url)
 				for name, url in valid_emojis
