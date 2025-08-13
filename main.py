@@ -1,8 +1,10 @@
 import logging
 import os
 import requests
+import threading
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://badger.hackclub.dev/api/emoji"
 OUTPUT_DIR = "./output"
@@ -69,10 +71,24 @@ def main():
 		emoji_data = response.json()
 		logger.info(f"Found {len(emoji_data)} emojis")
 
+		valid_emojis = [(name, url) for name, url in emoji_data.items() if url and is_valid_url(url)]
+		logger.info(f"Starting concurrent download of {len(valid_emojis)} emojis...")
+
 		success_count = 0
-		for name, url in emoji_data.items():
-			if url and download_emoji(name, url, logger):
-				success_count += 1
+
+		with ThreadPoolExecutor(max_workers=10) as executor:
+			future_to_emoji = {
+				executor.submit(download_emoji, name, url, logger): (name, url)
+				for name, url in valid_emojis
+			}
+
+			for future in as_completed(future_to_emoji):
+				name, url = future_to_emoji[future]
+				try:
+					if future.result():
+						success_count += 1
+				except Exception as e:
+					logger.error(f"Unexpected error with {name}: {e}")
 
 		logger.info(f"Download complete: {success_count} / {len(emoji_data)} successful")
 	except Exception as e:
