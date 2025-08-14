@@ -7,6 +7,7 @@ use tracing::{info, warn, error};
 use reqwest::Client;
 use std::collections::HashMap;
 use serde_json::Value;
+use futures::stream::{self, StreamExt};
 
 #[derive(Parser)]
 #[command(name = "hackclub-slack-emoji-dl")]
@@ -136,7 +137,36 @@ async fn main() -> Result<()> {
 
 	info!("Starting concurrent download of {} emojis...", valid_emojis.len());
 
+	let mut success_count = 0;
+	let mut results = stream::iter(valid_emojis)
+		.map(|(name, url)| {
+			let client = client.clone();
+			let output_dir = args.output_dir.clone();
+			async move {
+				match download_emoji(&client, name.clone(), url, &output_dir).await {
+					Ok(()) => {
+						success_count += 1;
+						Ok(())
+					}
+					Err(e) => {
+						error!("Failed to download {}: {}", name, e);
+						Err(e)
+					}
+				}
+			}
+		})
+		.buffer_unordered(args.concurrent);
+
+	let mut total_processed = 0;
+	while let Some(result) = results.next().await {
+		total_processed += 1;
+		if result.is_ok() {
+			success_count += 1;
+		}
+	}
+
 	let elapsed = start_time.elapsed();
+	info!("Download complete: {} / {} successful in {:.2?}", success_count, total_processed, elapsed);
 
 	Ok(())
 }
