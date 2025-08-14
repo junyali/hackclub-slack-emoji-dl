@@ -38,6 +38,61 @@ fn extract_extension(url: &str) -> String {
 		.unwrap_or_else(|| ".png".to_string())
 }
 
+async fn download_emoji(
+	client: &Client,
+	name: String,
+	url: String,
+	output_dir: &Path,
+) -> Result<()> {
+	if !url.starts_with("http://") && !url.starts_with("https://") {
+		warn!("Skipped {} (invalid URL)", name);
+		return Ok (());
+	}
+
+	let sanitised_name = sanitise_filename(&name);
+	let sanitised_name = if sanitised_name.is_empty() {
+		"emoji".to_string()
+	} else {
+		sanitised_name
+	};
+
+	let extension = extract_extension(&url);
+	let filename = format!("{}{}", sanitised_name, extension);
+	let filepath = output_dir.join(filename);
+
+	if filepath.exists() {
+		info!("Skipped {} (already exists)", name);
+		return Ok(());
+	}
+
+	let response = client
+		.get(&url)
+		.timeout(std::time::Duration::from_secs(10))
+		.send()
+		.await
+		.context(format!("Failed to fetch {}", url))?;
+
+	if !response.status().is_success() {
+		return Err(anyhow::anyhow!(
+			"HTTP error {} for {}",
+			response.status(),
+			name
+		))
+	}
+
+	let bytes = response
+		.bytes()
+		.await
+		.context("Failed to read response body")?;
+
+	fs::write(&filepath, &bytes)
+		.await
+		.context(format!("Failed to write file {}", filepath.display()))?;
+
+	info!("Downloaded {} -> {}", name, filepath.display());
+	Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
 	let args = Args::parse();
