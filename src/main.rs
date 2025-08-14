@@ -137,7 +137,6 @@ async fn main() -> Result<()> {
 
 	info!("Starting concurrent download of {} emojis...", valid_emojis.len());
 
-	let mut success_count = 0;
 	let mut results = stream::iter(valid_emojis)
 		.map(|(name, url)| {
 			let client = client.clone();
@@ -145,7 +144,6 @@ async fn main() -> Result<()> {
 			async move {
 				match download_emoji(&client, name.clone(), url, &output_dir).await {
 					Ok(()) => {
-						success_count += 1;
 						Ok(())
 					}
 					Err(e) => {
@@ -158,6 +156,7 @@ async fn main() -> Result<()> {
 		.buffer_unordered(args.concurrent);
 
 	let mut total_processed = 0;
+	let mut success_count = 0;
 	while let Some(result) = results.next().await {
 		total_processed += 1;
 		if result.is_ok() {
