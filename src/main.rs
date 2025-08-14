@@ -8,6 +8,8 @@ use reqwest::Client;
 use std::collections::HashMap;
 use serde_json::Value;
 use futures::stream::{self, StreamExt};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "hackclub-slack-emoji-dl")]
@@ -44,6 +46,8 @@ async fn download_emoji(
 	name: String,
 	url: String,
 	output_dir: &Path,
+	completed: Arc<AtomicUsize>,
+	total: usize,
 ) -> Result<()> {
 	if !url.starts_with("http://") && !url.starts_with("https://") {
 		warn!("Skipped {} (invalid URL)", name);
@@ -90,7 +94,8 @@ async fn download_emoji(
 		.await
 		.context(format!("Failed to write file {}", filepath.display()))?;
 
-	info!("Downloaded {} -> {}", name, filepath.display());
+	let current = completed.fetch_add(1, Ordering::Relaxed) + 1;
+	info!("Downloaded {} -> {} [{}/{}]", name, filepath.display(), current, total);
 	Ok(())
 }
 
@@ -139,12 +144,16 @@ async fn main() -> Result<()> {
 
 	info!("Starting concurrent download of {} emojis...", valid_emojis.len());
 
+	let total_emojis = valid_emojis.len();
+	let completed = Arc::new(AtomicUsize::new(0));
+
 	let mut results = stream::iter(valid_emojis)
 		.map(|(name, url)| {
 			let client = client.clone();
 			let output_dir = args.output_dir.clone();
+			let completed = completed.clone();
 			async move {
-				match download_emoji(&client, name.clone(), url, &output_dir).await {
+				match download_emoji(&client, name.clone(), url, &output_dir, completed, total_emojis).await {
 					Ok(()) => {
 						Ok(())
 					}
