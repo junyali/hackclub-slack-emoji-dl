@@ -96,6 +96,8 @@ async fn download_emoji(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+	tracing_subscriber::fmt::init();
+
 	let args = Args::parse();
 	let start_time = Instant::now();
 
