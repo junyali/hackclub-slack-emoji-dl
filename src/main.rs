@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use tokio::fs;
 use anyhow::{Context, Result};
 use tracing::{info, warn, error};
+use reqwest::Client;
+use std::collections::HashMap;
+use serde_json::Value;
 
 #[derive(Parser)]
 #[command(name = "hackclub-slack-emoji-dl")]
@@ -31,6 +34,23 @@ async fn main() -> Result<()> {
 	info!("Output directory: {}", args.output_dir.display());
 	info!("Concurrent downloads: {}", args.concurrent);
 	info!("API URL: {}", args.api_url);
+
+	let client = Client::new();
+
+	info!("Fetching data, hang tight!");
+	let response = client
+		.get(&args.api_url)
+		.timeout(std::time::Duration::from_secs(10))
+		.send()
+		.await
+		.context("Failed to fetch data")?;
+
+	let emoji_data: HashMap<String, Value> = response
+		.json()
+		.await
+		.context("Failed to parse JSON response")?;
+
+	info!("Found {} emojis", emoji_data.len());
 
 	Ok(())
 }
