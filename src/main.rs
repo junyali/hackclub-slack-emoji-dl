@@ -1,5 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
+use tokio::fs;
+use anyhow::Result;
 
 #[derive(Parser)]
 #[command(name = "hackclub-slack-emoji-dl")]
@@ -15,9 +17,12 @@ struct Args {
 	api_url: String,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
 	let args = Args::parse();
 
 	println!("meow :3");
 	println!("args: {}, {}, {}", args.output_dir.display(), args.concurrent, args.api_url);
+
+	Ok(())
 }
