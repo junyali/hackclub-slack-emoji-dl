@@ -6,7 +6,7 @@ use tokio::io::AsyncWriteExt;
 use anyhow::{Context, Result};
 use tracing::{info, warn, error};
 use reqwest::{Client, ClientBuilder};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use serde_json::Value;
 use futures::stream::{self, StreamExt};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,6 +21,12 @@ struct Args {
 
 	#[arg(short, long, default_value = "500")]
 	concurrent: usize,
+
+	#[arg(long, default_value = "5000")]
+	batch_size: usize,
+
+	#[arg(long, help = "Skip checking for existing files")]
+	skip_existence_check: bool,
 
 	#[arg(long, default_value = "https://badger.hackclub.dev/api/emoji")]
 	api_url: String,
@@ -49,6 +55,7 @@ async fn download_emoji(
 	output_dir: &Path,
 	completed: Arc<AtomicUsize>,
 	total: usize,
+	skip_existence_check: bool,
 ) -> Result<()> {
 	if !url.starts_with("http://") && !url.starts_with("https://") {
 		warn!("Skipped {} (invalid URL)", name);
@@ -66,7 +73,7 @@ async fn download_emoji(
 	let filename = format!("{}{}", sanitised_name, extension);
 	let filepath = output_dir.join(filename);
 
-	if filepath.exists() {
+	if !skip_existence_check && filepath.exists() {
 		info!("Skipped {} (already exists)", name);
 		return Ok(());
 	}
@@ -122,7 +129,23 @@ async fn main() -> Result<()> {
 
 	info!("Output directory: {}", args.output_dir.display());
 	info!("Concurrent downloads: {}", args.concurrent);
+	info!("Batch size: {}", args.batch_size);
 	info!("API URL: {}", args.api_url);
+
+	let existing_files = if args.skip_existence_check {
+		HashSet::new()
+	} else {
+		info!("Scanning output directory for existing files...");
+		let mut files = HashSet::new();
+		let mut entries = fs::read_dir(&args.output_dir).await?;
+		while let Some(entry) = entries.next_entry().await? {
+			if let Ok(file_name) = entry.file_name().into_string() {
+				files.insert(file_name);
+			}
+		}
+		info!("Found {} existing files to skip", files.len());
+		files
+	};
 
 	let client = ClientBuilder::new()
 		.pool_max_idle_per_host(args.concurrent)
@@ -155,41 +178,87 @@ async fn main() -> Result<()> {
 		})
 		.collect();
 
-	info!("Starting concurrent download of {} emojis...", valid_emojis.len());
-
 	let total_emojis = valid_emojis.len();
+	info!("Starting download of {} emojis in batches of {}...", total_emojis, args.batch_size);
+
 	let completed = Arc::new(AtomicUsize::new(0));
-
-	let mut results = stream::iter(valid_emojis)
-		.map(|(name, url)| {
-			let client = client.clone();
-			let output_dir = args.output_dir.clone();
-			let completed = completed.clone();
-			async move {
-				match download_emoji(&client, name.clone(), url, &output_dir, completed, total_emojis).await {
-					Ok(()) => {
-						Ok(())
-					}
-					Err(e) => {
-						error!("Failed to download {}: {}", name, e);
-						Err(e)
-					}
-				}
-			}
-		})
-		.buffer_unordered(args.concurrent);
-
 	let mut total_processed = 0;
 	let mut success_count = 0;
-	while let Some(result) = results.next().await {
-		total_processed += 1;
-		if result.is_ok() {
-			success_count += 1;
+
+	for(batch_index, batch) in valid_emojis.chunks(args.batch_size).enumerate() {
+		info!(
+			"Processing batch {}/{} ({} emojis)",
+			batch_index + 1,
+			(total_emojis + args.batch_size - 1) / args.batch_size,
+			batch.len()
+		);
+
+		let batch_start = Instant::now();
+
+		let mut results = stream::iter(batch.to_vec())
+			.map(|(name, url)| {
+				let client = client.clone();
+				let output_dir = args.output_dir.clone();
+				let completed = completed.clone();
+				let existing_files = &existing_files;
+
+				async move {
+					if !args.skip_existence_check {
+						let sanitised_name = sanitise_filename(&name);
+						let sanitised_name = if sanitised_name.is_empty() {
+							"emoji".to_string()
+						} else {
+							sanitised_name
+						};
+
+						let extension = extract_extension(&url);
+						let filename = format!("{}{}", sanitised_name, extension);
+
+						if existing_files.contains(&filename) {
+							completed.fetch_add(1, Ordering::Relaxed);
+							return Ok(());
+						}
+					}
+
+					match download_emoji(&client, name.clone(), url, &output_dir, completed, total_emojis, true).await {
+						Ok(()) => Ok(()),
+						Err(e) => {
+							error!("Failed to download {}: {}", name, e);
+							Err(e)
+						}
+					}
+				}
+			})
+			.buffer_unordered(args.concurrent);
+
+		while let Some(result) = results.next().await {
+			total_processed += 1;
+			if result.is_ok() {
+				success_count += 1;
+			}
 		}
+
+		let batch_elapsed = batch_start.elapsed();
+		info!(
+			"Batch {}/{} completed in {:.2?} ({} emojis/sec)",
+			batch_index + 1,
+			(total_emojis + args.batch_size - 1) / args.batch_size,
+			batch_elapsed,
+			batch.len() as f64 / batch_elapsed.as_secs_f64()
+		);
+
+		drop(results);
+		tokio::task::yield_now().await;
 	}
 
 	let elapsed = start_time.elapsed();
-	info!("Download complete: {} / {} successful in {:.2?}", success_count, total_processed, elapsed);
+	info!(
+		"Download complete: {} / {} successful in {:.2?} ({} emojis/sec)",
+		success_count,
+		total_processed,
+		elapsed,
+		total_processed as f64 / elapsed.as_secs_f64()
+	);
 
 	println!("\nPress Enter to exit...");
 	let mut input = String::new();
