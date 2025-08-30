@@ -58,7 +58,7 @@ async fn download_emoji(
 	skip_existence_check: bool,
 ) -> Result<()> {
 	if !url.starts_with("http://") && !url.starts_with("https://") {
-		warn!("Skipped {} (invalid URL)", name);
+		warn!("Skipped {} (invalid URL: {})", name, url);
 		return Ok (());
 	}
 
@@ -112,6 +112,45 @@ async fn download_emoji(
 	let current = completed.fetch_add(1, Ordering::Relaxed) + 1;
 	info!("Downloaded {} -> {} [{}/{}]", name, filepath.display(), current, total);
 	Ok(())
+}
+
+async fn download_emoji_with_retry(
+	client: &Client,
+	name: String,
+	url: String,
+	output_dir: &Path,
+	completed: Arc<AtomicUsize>,
+	total: usize,
+	skip_existence_check: bool,
+) -> Result<()> {
+	const MAX_RETRIES: usize = 3;
+
+	if !url.starts_with("http://") && !url.starts_with("https://") {
+		warn!("Skipped {} (invalid URL: {})", name, url);
+		return Ok(());
+	}
+
+	let mut last_error = None;
+
+	for attempt in 1..=MAX_RETRIES {
+		match download_emoji(client, name.clone(), url.clone(), output_dir.clone(), completed.clone(), total, skip_existence_check).await {
+			Ok(()) => return Ok(()),
+			Err(e) => {
+				if attempt < MAX_RETRIES {
+					let backoff = std::time::Duration::from_millis(500 * 2u64.pow((attempt - 1) as u32));
+					warn!("Retry {}/{} for {}: {} (waiting {:?})",
+						attempt, MAX_RETRIES, name, e, backoff);
+					tokio::time::sleep(backoff).await;
+					last_error = Some(e);
+				} else {
+					return Err(e);
+				}
+			}
+		}
+	}
+
+	// This should never be reached >:(
+	Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error during retry")))
 }
 
 #[tokio::main]
@@ -221,7 +260,7 @@ async fn main() -> Result<()> {
 						}
 					}
 
-					match download_emoji(&client, name.clone(), url, &output_dir, completed, total_emojis, true).await {
+					match download_emoji_with_retry(&client, name.clone(), url, &output_dir, completed, total_emojis, true).await {
 						Ok(()) => Ok(()),
 						Err(e) => {
 							error!("Failed to download {}: {}", name, e);
