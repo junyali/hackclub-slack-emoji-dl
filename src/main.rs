@@ -178,5 +178,9 @@ async fn main() -> Result<()> {
 	let elapsed = start_time.elapsed();
 	info!("Download complete: {} / {} successful in {:.2?}", success_count, total_processed, elapsed);
 
+	println!("\nPress Enter to exit...");
+	let mut input = String::new();
+	std::io::stdin().read_line(&mut input).expect("Failed to read input");
+
 	Ok(())
 }
