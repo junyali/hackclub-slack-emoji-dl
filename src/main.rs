@@ -151,6 +151,7 @@ async fn main() -> Result<()> {
 		.pool_max_idle_per_host(args.concurrent)
 		.pool_idle_timeout(std::time::Duration::from_secs(30))
 		.timeout(std::time::Duration::from_secs(15))
+		.tcp_keepalive(std::time::Duration::from_secs(60))
 		.build()
 		.context("Failed to create HTTP client")?;
 
