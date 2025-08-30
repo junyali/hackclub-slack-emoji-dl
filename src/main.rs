@@ -2,9 +2,10 @@ use clap::Parser;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::time::Instant;
+use tokio::io::AsyncWriteExt;
 use anyhow::{Context, Result};
 use tracing::{info, warn, error};
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 use std::collections::HashMap;
 use serde_json::Value;
 use futures::stream::{self, StreamExt};
@@ -18,7 +19,7 @@ struct Args {
 	#[arg(short, long, default_value = "./output")]
 	output_dir: PathBuf,
 
-	#[arg(short, long, default_value = "100")]
+	#[arg(short, long, default_value = "500")]
 	concurrent: usize,
 
 	#[arg(long, default_value = "https://badger.hackclub.dev/api/emoji")]
@@ -90,10 +91,17 @@ async fn download_emoji(
 		.await
 		.context("Failed to read response body")?;
 
-	fs::write(&filepath, &bytes)
+	let mut file = fs::File::create(&filepath)
 		.await
-		.context(format!("Failed to write file {}", filepath.display()))?;
+		.context(format!("Failed to create file {}", filepath.display()))?;
 
+	file.write_all(&bytes)
+		.await
+		.context(format!("Failed to write data to {}", filepath.display()))?;
+
+	file.flush()
+		.await
+		.context(format!("Failed to flush data to {}", filepath.display()))?;
 	let current = completed.fetch_add(1, Ordering::Relaxed) + 1;
 	info!("Downloaded {} -> {} [{}/{}]", name, filepath.display(), current, total);
 	Ok(())
@@ -116,7 +124,12 @@ async fn main() -> Result<()> {
 	info!("Concurrent downloads: {}", args.concurrent);
 	info!("API URL: {}", args.api_url);
 
-	let client = Client::new();
+	let client = ClientBuilder::new()
+		.pool_max_idle_per_host(args.concurrent)
+		.pool_idle_timeout(std::time::Duration::from_secs(30))
+		.timeout(std::time::Duration::from_secs(15))
+		.build()
+		.context("Failed to create HTTP client")?;
 
 	info!("Fetching data, hang tight!");
 	let response = client
