@@ -14,6 +14,10 @@ This is my first Rust project. Roast my poor programming conventions all you wan
 - Automatic retries if a download fails
 - It's pretty damn fast TwT
 
+![](./results.png)
+
+![](./output_results.png)
+
 ## Usage
 
 `hackclub-slack-emoji-dl [OPTIONS]`
